@@ -1,0 +1,82 @@
+{
+  "Comment": "This state machine responds to EC2 lifecycle events, where possible enriching that event with the instance's \"Name\" tag and then emitting the enriched event for downstream consumers.",
+  "StartAt": "Remove problem characters from input",
+  "States": {
+    "Remove problem characters from input": {
+      "Type": "Pass",
+      "Parameters": {
+        "instanceid.$": "$.detail.instance-id"
+      },
+      "ResultPath": "$.detail.enriched",
+      "Next": "Get instance name from Tag"
+    },
+    "Get instance name from Tag": {
+      "Type": "Task",
+      "Parameters": {
+        "InstanceIds.$": "States.Array($.detail.enriched.instanceid)"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Get default name from Parameter Store",
+          "Comment": "If no name is found, insert an arbitrary default value",
+          "ResultPath": "$.error"
+        }
+      ],
+      "ResultSelector": {
+        "instancename.$": "$..Reservations[0].Instances[0].Tags[?(@.Key==Name)].Value",
+        "instanceid.$": "$.Reservations[0].Instances[0].InstanceId"
+      },
+      "ResultPath": "$.detail.enriched",
+      "Next": "Convert instance name to a string"
+    },
+    "Get default name from Parameter Store": {
+      "Type": "Task",
+      "Next": "Add ID back to enriched payload",
+      "Parameters": {
+        "Name": "ProtoDefaultName"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "ResultSelector": {
+        "instancename.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.detail.enriched"
+    },
+    "Add ID back to enriched payload": {
+      "Type": "Pass",
+      "Next": "Emit enriched event",
+      "Parameters": {
+        "instanceid.$": "$.detail.instance-id",
+        "instancename.$": "$.detail.enriched.instancename"
+      },
+      "ResultPath": "$.detail.enriched"
+    },
+    "Convert instance name to a string": {
+      "Type": "Pass",
+      "ResultPath": "$.detail.enriched",
+      "Parameters": {
+        "instancename.$": "$.detail.enriched.instancename[0]",
+        "instanceid.$": "$.detail.enriched.instanceid"
+      },
+      "Next": "Emit enriched event"
+    },
+    "Emit enriched event": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Parameters": {
+        "Entries": [
+          {
+            "Detail": {
+              "Message.$": "$"
+            },
+            "DetailType": "EnrichedEC2Event",
+            "EventBusName": "${CustomEventBusName}",
+            "Source": "custom.enriched.ec2"
+          }
+        ]
+      },
+      "End": true
+    }
+  }
+}

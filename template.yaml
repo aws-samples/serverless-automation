@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Serverless Event Enrichment
+
+Resources:
+  EventEnrichmentStateMachine: # Takes an EC2 Instance Event and fetches the "Name" tag if it exists then emits the enriched event.
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/event-enrichment-sfn.asl.json
+      DefinitionSubstitutions:
+        CustomEventBusName: !Ref ApplicationEventBus
+      Events: # EventBridge Rule to capture all EC2 instance state changes from the default EventBridge Bus
+        EBRule:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - "aws.ec2"
+              detail-type:
+                - "EC2 Instance State-change Notification"
+      Policies:
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref ApplicationEventBus
+        - EC2DescribePolicy:
+            Action: "ec2:DescribeInstances"
+            Resource: "*" # Required so that workflow can call DecribeInstances on any EC2 instances to get tags.
+        - SSMParameterReadPolicy:
+            ParameterName: !Ref DefaultNameSSMParam
+
+  ApplicationEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "${AWS::StackName}-ApplicationEventBus"
+      Tags:
+        - Key: "stack-origin"
+          Value: !Sub "${AWS::StackName}"
+
+  EnrichedEC2EventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Sends enriched EC2 Lifecycle events to CloudWatch Logs
+      EventBusName: !Ref ApplicationEventBus
+      EventPattern:
+        source:
+          - "custom.enriched.ec2"
+      Name: !Sub "${AWS::StackName}-EnrichedEC2EventsRule"
+      # RoleArn: String will be needed - this Role can be copied from existing one in Isengard console.
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt LogGroupForEnrichedEvents.Arn
+          Id: LogTarget
+
+  LogGroupForEnrichedEvents:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete #Explicit Delete as this is a demo, in Production use 'Retain'
+    UpdateReplacePolicy: Delete #Explicit Delete as this is a demo, in Production use 'Retain'
+    Properties:
+      LogGroupName: /custom/enriched-ec2-events
+      RetentionInDays: 14
+      Tags:
+        - Key: "stack-origin"
+          Value: !Sub "${AWS::StackName}"
+
+  LogGroupForEnrichedEventsResourcePolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: "EnrichedEventsFromEventBridgeToCloudWatchLogs"
+      PolicyDocument: !Sub '{ "Version": "2012-10-17", "Statement": [ { "Sid": "TrustEventsToStoreLogEvent", "Effect": "Allow", "Principal": { "Service": [ "events.amazonaws.com" ] }, "Action":["logs:CreateLogStream", "logs:PutLogEvents"], "Resource": "${LogGroupForEnrichedEvents}:*" } ] }'
+
+  DefaultNameSSMParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: Stores the default name to use if no "Name" key is available on EC2 instance tag.
+      Name: !Sub "${AWS::StackName}-DefaultNameParam"
+      Type: String
+      Value: NoNameTagAvailable
+
+Outputs:
+  CloudWatchLogsConsoleURL:
+    Description: "URL to the CloudWatch Logs log group to see the resultant enriched event in text form."
+    Value: !Sub "https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#logsV2:log-groups/log-group/$252Fcustom$252Fenriched-ec2-events"
+  StepFunctionsStateMachineConsoleURL:
+    Description: "URL to the Step Functions State Machine that will be triggered when EventBridge rule matches an event. Open this URL after experimenting to step through an execution."
+    Value: !Sub "https://console.aws.amazon.com/states/home?region=${AWS::Region}#/statemachines/view/${EventEnrichmentStateMachine}"
