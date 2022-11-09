@@ -10,7 +10,7 @@ In your context, you can modify and extend this idea to enrich any operational e
 
 ![image](./architecture.png)
 
-There is a [full blog post](linkTBD) that explains this architecture and application in full detail. The post uses an example of an SNS notification (seen in the diagram above), and this code uses CloudWatch Logs as the destination for the enriched event. In both cases the principles are the same.
+There is a [full blog post](https://aws.amazon.com/blogs/compute/enriching-operational-events-with-aws-serverless/) that explains this architecture and application in full detail. The post uses an example of an SNS notification (seen in the diagram above), and this code uses CloudWatch Logs as the destination for the enriched event. In both cases the principles are the same.
 
 1. An EC2 instance emmits an operational lifecycle event and this is sent to your Default event bus on Amazon EventBridge.
 2. If the event matches the deployed EventBridge Rule then EventBridge passes the event's payload to a Step Functions state machine.
